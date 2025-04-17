@@ -1,4 +1,4 @@
-package repo
+package storage
 
 import (
 	"context"
@@ -15,15 +15,9 @@ import (
 	"sync"
 )
 
-const LockFile = ".repo.lock"
+const LockFile = ".storage.lock"
 
-type Storage interface {
-	Datastore() Datastore
-	GetStorageUsage(ctx context.Context) (uint64, error)
-	Close() error
-}
-
-type Repo struct {
+type Storage struct {
 	locker   sync.Mutex
 	closed   bool
 	path     string
@@ -31,7 +25,7 @@ type Repo struct {
 	ds       Datastore
 }
 
-func (r *Repo) Datastore() Datastore {
+func (r *Storage) Datastore() Datastore {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
@@ -39,16 +33,16 @@ func (r *Repo) Datastore() Datastore {
 	return d
 }
 
-func (r *Repo) GetStorageUsage(ctx context.Context) (uint64, error) {
+func (r *Storage) GetStorageUsage(ctx context.Context) (uint64, error) {
 	return ds.DiskUsage(ctx, r.Datastore())
 }
 
-func (r *Repo) Close() error {
+func (r *Storage) Close() error {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
 	if r.closed {
-		return errors.New("repo is closed")
+		return errors.New("storage is closed")
 	}
 
 	if err := r.ds.Close(); err != nil {
@@ -60,17 +54,17 @@ func (r *Repo) Close() error {
 	return r.lockfile.Close()
 }
 
-func NewRepo(repoPath string) (*Repo, error) {
-	if err := initSpec(repoPath, DefaultDiskSpec()); err != nil {
+func NewStorage(path string) (*Storage, error) {
+	if err := initSpec(path, DefaultDiskSpec()); err != nil {
 		return nil, err
 	}
 
-	repo, err := open(repoPath)
+	storage, err := open(path)
 	if err != nil {
 		return nil, err
 	}
 
-	return repo, nil
+	return storage, nil
 }
 
 func initSpec(path string, conf map[string]interface{}) error {
@@ -89,8 +83,8 @@ func initSpec(path string, conf map[string]interface{}) error {
 	return os.WriteFile(specPath, bytes, 0o600)
 }
 
-func open(repoPath string) (*Repo, error) {
-	r, err := newRepo(repoPath)
+func open(path string) (*Storage, error) {
+	r, err := newStorage(path)
 	if err != nil {
 		return nil, err
 	}
@@ -123,20 +117,20 @@ func open(repoPath string) (*Repo, error) {
 	return r, nil
 }
 
-func newRepo(repoPath string) (*Repo, error) {
-	if repoPath == "" {
-		return nil, errors.New("no repo path provided")
+func newStorage(path string) (*Storage, error) {
+	if path == "" {
+		return nil, errors.New("no path provided")
 	}
 
-	expPath, err := homedir.Expand(filepath.Clean(repoPath))
+	expPath, err := homedir.Expand(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
 
-	return &Repo{path: expPath}, nil
+	return &Storage{path: expPath}, nil
 }
 
-func (r *Repo) openDatastore() error {
+func (r *Storage) openDatastore() error {
 	dsc, err := AnyDatastoreConfig(DefaultDiskSpec())
 	if err != nil {
 		return err
@@ -160,13 +154,13 @@ func (r *Repo) openDatastore() error {
 
 	r.ds = d
 
-	prefix := "ipfs.repo.datastore"
+	prefix := "ipfs.storage.datastore"
 	r.ds = measure.New(prefix, r.ds)
 
 	return nil
 }
 
-func (r *Repo) readSpec() (string, error) {
+func (r *Storage) readSpec() (string, error) {
 	path := DatastoreSpecPath(r.path)
 
 	b, err := os.ReadFile(path)
