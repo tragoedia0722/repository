@@ -54,6 +54,25 @@ func (r *Storage) Close() error {
 	return r.lockfile.Close()
 }
 
+func (r *Storage) Destroy() error {
+	r.locker.Lock()
+	defer r.locker.Unlock()
+
+	if !r.closed {
+		if err := r.ds.Close(); err != nil {
+			return err
+		}
+
+		r.closed = true
+	}
+
+	if err := r.lockfile.Close(); err != nil {
+		return err
+	}
+
+	return os.RemoveAll(r.path)
+}
+
 func NewStorage(path string) (*Storage, error) {
 	if err := initSpec(path, DefaultDiskSpec()); err != nil {
 		return nil, err
