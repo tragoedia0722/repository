@@ -93,7 +93,7 @@ func (ext *Extractor) Extract(ctx context.Context, overwrite bool) error {
 	}
 	ext.nodeSize = size
 
-	if !isSubPath(ext.path, ext.basePath) {
+	if !ext.isSubPath(ext.path, ext.basePath) {
 		return ErrPathTraversal
 	}
 
@@ -113,7 +113,7 @@ func (ext *Extractor) updateProgress(size int64, filename string) {
 	}
 }
 
-func isSubPath(path, base string) bool {
+func (*Extractor) isSubPath(path, base string) bool {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return false
@@ -162,7 +162,7 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 	switch node := nd.(type) {
 	case *files.Symlink:
 		target := node.Target
-		if !isValidSymlinkTarget(target) {
+		if !ext.isValidSymlinkTarget(target) {
 			return fmt.Errorf("invalid symlink target: %s", target)
 		}
 
@@ -344,7 +344,7 @@ func (*Extractor) isDir(nd files.Node) bool {
 	return isDir
 }
 
-func isValidSymlinkTarget(target string) bool {
+func (*Extractor) isValidSymlinkTarget(target string) bool {
 	targetPath := filepath.Clean(target)
 
 	return !filepath.IsAbs(targetPath) && !strings.HasPrefix(targetPath, "..")

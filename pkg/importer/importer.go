@@ -121,7 +121,6 @@ func (imp *Importer) Import(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 
-	// 处理剩余工作（收集所有块）
 	cidSet := cid.NewSet()
 	if err = merkledag.Walk(ctx, merkledag.GetLinksWithDAG(imp.dagService), node.Cid(), func(c cid.Cid) bool {
 		return cidSet.Visit(c)
