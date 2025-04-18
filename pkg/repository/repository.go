@@ -4,12 +4,17 @@ import (
 	"context"
 	"git.hificloud.net/nas2024/cloud/demeter/repository/internal/storage"
 	"github.com/ipfs/boxo/blockstore"
+	blocks "github.com/ipfs/go-block-format"
+	cid2 "github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multicodec"
+	mh "github.com/multiformats/go-multihash"
 	"os"
 )
 
 type Repository struct {
 	storage    *storage.Storage
 	blockStore blockstore.Blockstore
+	builder    cid2.Builder
 }
 
 func NewRepository(path string) (*Repository, error) {
@@ -27,6 +32,11 @@ func NewRepository(path string) (*Repository, error) {
 	return &Repository{
 		storage:    s,
 		blockStore: blockstore.NewBlockstore(s.Datastore()),
+		builder: cid2.V1Builder{
+			Codec:    uint64(multicodec.DagPb),
+			MhType:   mh.SHA2_256,
+			MhLength: -1,
+		},
 	}, nil
 
 }
@@ -57,4 +67,91 @@ func (r *Repository) Destroy() error {
 	}
 
 	return r.storage.Destroy()
+}
+
+func (r *Repository) PutBlock(ctx context.Context, bytes []byte) (string, error) {
+	sum, err := r.builder.Sum(bytes)
+	if err != nil {
+		return "", err
+	}
+
+	blk, err := blocks.NewBlockWithCid(bytes, sum)
+	if err != nil {
+		return "", err
+	}
+
+	err = r.blockStore.Put(ctx, blk)
+	if err != nil {
+		return "", err
+	}
+
+	return sum.String(), nil
+}
+
+func (r *Repository) PutManyBlocks(ctx context.Context, bytes [][]byte) ([]string, error) {
+	blks := make([]blocks.Block, 0, len(bytes))
+	cids := make([]string, 0, len(bytes))
+
+	for _, b := range bytes {
+		sum, err := r.builder.Sum(b)
+		if err != nil {
+			return nil, err
+		}
+		cids = append(cids, sum.String())
+
+		blk, err := blocks.NewBlockWithCid(b, sum)
+		if err != nil {
+			return nil, err
+		}
+		blks = append(blks, blk)
+	}
+
+	err := r.blockStore.PutMany(ctx, blks)
+	if err != nil {
+		return nil, err
+	}
+
+	return cids, nil
+}
+
+func (r *Repository) HasBlock(ctx context.Context, cid string) (bool, error) {
+	c, err := cid2.Parse(cid)
+	if err != nil {
+		return false, err
+	}
+
+	return r.blockStore.Has(ctx, c)
+}
+
+func (r *Repository) HasAllBlocks(ctx context.Context, cids []string) (bool, error) {
+	for _, cid := range cids {
+		c, err := cid2.Parse(cid)
+		if err != nil {
+			return false, err
+		}
+
+		has, err := r.blockStore.Has(ctx, c)
+		if err != nil {
+			return false, err
+		}
+		if !has {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func (r *Repository) GetRawData(ctx context.Context, cid string) ([]byte, error) {
+	c, err := cid2.Parse(cid)
+	if err != nil {
+		return nil, err
+	}
+
+	blk, err := r.blockStore.Get(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+
+	return blk.RawData(), nil
 }
