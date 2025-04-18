@@ -33,14 +33,14 @@ var (
 	ErrPathTraversal         = errors.New("extraction path escapes base directory")
 )
 
-type extractorProgressCallback func(completed, total int64, currentFile string)
+type progressCallback func(completed, total int64, currentFile string)
 
 type Extractor struct {
 	blockStore    blockstore.Blockstore
 	cid           string
 	path          string
 	basePath      string
-	progress      extractorProgressCallback
+	progress      progressCallback
 	bufferPool    sync.Pool
 	nodeSize      int64
 	extractedSize atomic.Int64
@@ -63,16 +63,16 @@ func NewExtractor(blockStore blockstore.Blockstore, cid string, path string) *Ex
 	}
 }
 
-func (e *Extractor) WithProgress(progressFn extractorProgressCallback) *Extractor {
-	e.progress = progressFn
-	return e
+func (ext *Extractor) WithProgress(progressFn progressCallback) *Extractor {
+	ext.progress = progressFn
+	return ext
 }
 
-func (e *Extractor) Extract(ctx context.Context, overwrite bool) error {
-	bs := blockservice.New(e.blockStore, nil)
+func (ext *Extractor) Extract(ctx context.Context, overwrite bool) error {
+	bs := blockservice.New(ext.blockStore, nil)
 	ds := merkledag.NewDAGService(bs)
 
-	c, err := cid.Parse(e.cid)
+	c, err := cid.Parse(ext.cid)
 	if err != nil {
 		return err
 	}
@@ -91,13 +91,13 @@ func (e *Extractor) Extract(ctx context.Context, overwrite bool) error {
 	if err != nil {
 		return err
 	}
-	e.nodeSize = size
+	ext.nodeSize = size
 
-	if !isSubPath(e.path, e.basePath) {
+	if !isSubPath(ext.path, ext.basePath) {
 		return ErrPathTraversal
 	}
 
-	err = e.writeTo(ctx, fileNode, e.path, overwrite, "")
+	err = ext.writeTo(ctx, fileNode, ext.path, overwrite, "")
 	if err != nil {
 		return err
 	}
@@ -105,11 +105,11 @@ func (e *Extractor) Extract(ctx context.Context, overwrite bool) error {
 	return nil
 }
 
-func (e *Extractor) updateProgress(size int64, filename string) {
-	e.extractedSize.Add(size)
+func (ext *Extractor) updateProgress(size int64, filename string) {
+	ext.extractedSize.Add(size)
 
-	if e.progress != nil {
-		e.progress(e.extractedSize.Load(), e.nodeSize, filename)
+	if ext.progress != nil {
+		ext.progress(ext.extractedSize.Load(), ext.nodeSize, filename)
 	}
 }
 
@@ -129,14 +129,14 @@ func isSubPath(path, base string) bool {
 	return absPath == absBase || strings.HasPrefix(absPath, absBase+string(filepath.Separator))
 }
 
-func (e *Extractor) writeTo(ctx context.Context, nd files.Node, path string, allowOverwrite bool, relativePath string) error {
+func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, allowOverwrite bool, relativePath string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
 
-	if e.isInterrupted {
+	if ext.isInterrupted {
 		return errors.New("extraction was interrupted")
 	}
 
@@ -150,7 +150,7 @@ func (e *Extractor) writeTo(ctx context.Context, nd files.Node, path string, all
 			return e1
 		}
 
-		if !(fi.IsDir() && e.isDir(nd)) {
+		if !(fi.IsDir() && ext.isDir(nd)) {
 			if err = os.RemoveAll(path); err != nil {
 				return fmt.Errorf("failed to remove existing path: %w", err)
 			}
@@ -168,7 +168,7 @@ func (e *Extractor) writeTo(ctx context.Context, nd files.Node, path string, all
 
 		return os.Symlink(target, path)
 	case files.File:
-		return e.writeFileWithBuffer(ctx, node, path, relativePath)
+		return ext.writeFileWithBuffer(ctx, node, path, relativePath)
 	case files.Directory:
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return err
@@ -176,14 +176,14 @@ func (e *Extractor) writeTo(ctx context.Context, nd files.Node, path string, all
 
 		entries := node.Entries()
 
-		return e.processDirectory(ctx, entries, path, allowOverwrite, relativePath)
+		return ext.processDirectory(ctx, entries, path, allowOverwrite, relativePath)
 	default:
 		return fmt.Errorf("file type %T at %q is not supported", node, path)
 	}
 }
 
-func (e *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, path string, relativePath string) error {
-	f, err := e.createNewFile(path)
+func (ext *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, path string, relativePath string) error {
+	f, err := ext.createNewFile(path)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (e *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, pa
 	pr := &extractReader{
 		r: node,
 		onProgress: func(n int64) {
-			e.updateProgress(n, relativePath)
+			ext.updateProgress(n, relativePath)
 		},
 	}
 
@@ -213,7 +213,7 @@ func (e *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, pa
 
 	select {
 	case <-ctx.Done():
-		e.isInterrupted = true
+		ext.isInterrupted = true
 		return ctx.Err()
 	case <-done:
 		if copyErr != nil {
@@ -224,7 +224,7 @@ func (e *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, pa
 	return buf.Flush()
 }
 
-func (e *Extractor) processDirectory(ctx context.Context, entries files.DirIterator, path string, allowOverwrite bool, relativePath string) error {
+func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIterator, path string, allowOverwrite bool, relativePath string) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 	sem := make(chan struct{}, maxConcurrency)
@@ -240,7 +240,7 @@ func (e *Extractor) processDirectory(ctx context.Context, entries files.DirItera
 		}
 
 		entryName := entries.Name()
-		if entryName == "" || entryName == "." || entryName == ".." || !e.isValidFilename(entryName) {
+		if entryName == "" || entryName == "." || entryName == ".." || !ext.isValidFilename(entryName) {
 			return ErrInvalidDirectoryEntry
 		}
 
@@ -249,8 +249,8 @@ func (e *Extractor) processDirectory(ctx context.Context, entries files.DirItera
 		entryNode := entries.Node()
 
 		fileNode, isFile := entryNode.(files.File)
-		if _, isSymlink := entryNode.(*files.Symlink); isSymlink || (isFile && e.isLargeFile(fileNode)) {
-			if err := e.writeTo(ctx, entryNode, childPath, allowOverwrite, childRelPath); err != nil {
+		if _, isSymlink := entryNode.(*files.Symlink); isSymlink || (isFile && ext.isLargeFile(fileNode)) {
+			if err := ext.writeTo(ctx, entryNode, childPath, allowOverwrite, childRelPath); err != nil {
 				return err
 			}
 
@@ -264,7 +264,7 @@ func (e *Extractor) processDirectory(ctx context.Context, entries files.DirItera
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := e.writeTo(ctx, n, p, allowOverwrite, rp); err != nil {
+			if err := ext.writeTo(ctx, n, p, allowOverwrite, rp); err != nil {
 				select {
 				case errCh <- err:
 					cancel()
@@ -290,7 +290,7 @@ func (e *Extractor) processDirectory(ctx context.Context, entries files.DirItera
 	return nil
 }
 
-func (e *Extractor) isLargeFile(file files.File) bool {
+func (ext *Extractor) isLargeFile(file files.File) bool {
 	size, err := file.Size()
 	if err != nil {
 		return false
