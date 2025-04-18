@@ -1,8 +1,8 @@
-package main
+package repository
 
 import (
 	"context"
-	"git.hificloud.net/nas2024/cloud/demeter/repository/pkg/storage"
+	"git.hificloud.net/nas2024/cloud/demeter/repository/internal/storage"
 	"github.com/ipfs/boxo/blockstore"
 	"os"
 )
