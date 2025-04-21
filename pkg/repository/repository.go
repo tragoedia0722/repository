@@ -69,35 +69,35 @@ func (r *Repository) Destroy() error {
 	return r.storage.Destroy()
 }
 
-func (r *Repository) PutBlock(ctx context.Context, bytes []byte) (string, error) {
+func (r *Repository) PutBlock(ctx context.Context, bytes []byte) (*cid2.Cid, error) {
 	sum, err := r.builder.Sum(bytes)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	blk, err := blocks.NewBlockWithCid(bytes, sum)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	err = r.blockStore.Put(ctx, blk)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return sum.String(), nil
+	return &sum, nil
 }
 
-func (r *Repository) PutManyBlocks(ctx context.Context, bytes [][]byte) ([]string, error) {
+func (r *Repository) PutManyBlocks(ctx context.Context, bytes [][]byte) ([]*cid2.Cid, error) {
 	blks := make([]blocks.Block, 0, len(bytes))
-	cids := make([]string, 0, len(bytes))
+	cids := make([]*cid2.Cid, 0, len(bytes))
 
 	for _, b := range bytes {
 		sum, err := r.builder.Sum(b)
 		if err != nil {
 			return nil, err
 		}
-		cids = append(cids, sum.String())
+		cids = append(cids, &sum)
 
 		blk, err := blocks.NewBlockWithCid(b, sum)
 		if err != nil {
@@ -154,4 +154,13 @@ func (r *Repository) GetRawData(ctx context.Context, cid string) ([]byte, error)
 	}
 
 	return blk.RawData(), nil
+}
+
+func (r *Repository) DelBlock(ctx context.Context, cid string) error {
+	c, err := cid2.Parse(cid)
+	if err != nil {
+		return err
+	}
+
+	return r.blockStore.DeleteBlock(ctx, c)
 }
