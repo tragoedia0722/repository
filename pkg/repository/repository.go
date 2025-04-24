@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"git.hificloud.net/nas2024/cloud/demeter/repository/internal/storage"
 	"github.com/ipfs/boxo/blockstore"
 	blocks "github.com/ipfs/go-block-format"
@@ -67,6 +68,34 @@ func (r *Repository) Destroy() error {
 	}
 
 	return r.storage.Destroy()
+}
+
+func (r *Repository) PutBlockWithCid(ctx context.Context, cid string, bytes []byte) error {
+	_, err := cid2.Parse(cid)
+	if err != nil {
+		return err
+	}
+
+	sum, err := r.builder.Sum(bytes)
+	if err != nil {
+		return err
+	}
+
+	if sum.String() != cid {
+		return fmt.Errorf("cid mismatch: expected %s, got %s", cid, sum.String())
+	}
+
+	blk, err := blocks.NewBlockWithCid(bytes, sum)
+	if err != nil {
+		return err
+	}
+
+	err = r.blockStore.Put(ctx, blk)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (r *Repository) PutBlock(ctx context.Context, bytes []byte) (*cid2.Cid, error) {
