@@ -71,7 +71,7 @@ func (r *Repository) Destroy() error {
 }
 
 func (r *Repository) PutBlockWithCid(ctx context.Context, cid string, bytes []byte) error {
-	_, err := cid2.Parse(cid)
+	c, err := cid2.Parse(cid)
 	if err != nil {
 		return err
 	}
@@ -81,8 +81,8 @@ func (r *Repository) PutBlockWithCid(ctx context.Context, cid string, bytes []by
 		return err
 	}
 
-	if sum.String() != cid {
-		return fmt.Errorf("cid mismatch: expected %s, got %s", cid, sum.String())
+	if sum.Hash().String() != c.Hash().String() {
+		return fmt.Errorf("cid hash mismatch: expected %s, got %s", c.Hash(), sum.Hash())
 	}
 
 	blk, err := blocks.NewBlockWithCid(bytes, sum)
