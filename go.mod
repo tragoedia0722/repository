@@ -1,4 +1,4 @@
-module github.com/Tragoedia0722/repository
+module github.com/tragoedia0722/repository
 
 go 1.24.0
 
