@@ -1,9 +1,10 @@
-module git.hificloud.net/nas2024/cloud/demeter/repository
+module github.com/Tragoedia0722/repository
 
 go 1.24.0
 
 require (
 	github.com/ipfs/boxo v0.29.1
+	github.com/ipfs/go-block-format v0.2.0
 	github.com/ipfs/go-cid v0.5.0
 	github.com/ipfs/go-datastore v0.8.2
 	github.com/ipfs/go-ds-flatfs v0.5.5
@@ -13,6 +14,7 @@ require (
 	github.com/ipfs/go-ipld-format v0.6.0
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/multiformats/go-multicodec v0.9.0
+	github.com/multiformats/go-multihash v0.2.3
 	github.com/syndtr/goleveldb v1.0.0
 )
 
@@ -28,7 +30,6 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/ipfs/bbloom v0.0.4 // indirect
 	github.com/ipfs/go-bitfield v1.1.0 // indirect
-	github.com/ipfs/go-block-format v0.2.0 // indirect
 	github.com/ipfs/go-ipfs-util v0.0.3 // indirect
 	github.com/ipfs/go-ipld-legacy v0.2.1 // indirect
 	github.com/ipfs/go-log/v2 v2.5.1 // indirect
@@ -43,7 +44,6 @@ require (
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
-	github.com/multiformats/go-multihash v0.2.3 // indirect
 	github.com/multiformats/go-varint v0.0.7 // indirect
 	github.com/polydawn/refmt v0.89.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
