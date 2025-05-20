@@ -6,11 +6,11 @@ import (
 	"fmt"
 	ds "github.com/ipfs/go-datastore"
 	measure "github.com/ipfs/go-ds-measure"
-	lockfile "github.com/ipfs/go-fs-lock"
 	"github.com/mitchellh/go-homedir"
-	"io"
+	"github.com/rogpeppe/go-internal/lockedfile"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -21,7 +21,7 @@ type Storage struct {
 	locker   sync.Mutex
 	closed   bool
 	path     string
-	lockfile io.Closer
+	lockFile *lockedfile.File
 	ds       Datastore
 }
 
@@ -42,7 +42,41 @@ func (r *Storage) Close() error {
 	defer r.locker.Unlock()
 
 	if r.closed {
-		return errors.New("storage is closed")
+		return nil
+	}
+
+	var errs []error
+
+	if err := r.ds.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("datastore close error: %v", err))
+	}
+
+	r.closed = true
+
+	if r.lockFile != nil {
+		if err := r.lockFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("lock file close error: %v", err))
+		}
+
+		lockPath := r.lockFile.Name()
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("remove lock file error: %v", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during close: %v", errs)
+	}
+
+	return nil
+}
+
+func (r *Storage) Destroy() error {
+	r.locker.Lock()
+	defer r.locker.Unlock()
+
+	if r.closed {
+		return os.RemoveAll(r.path)
 	}
 
 	if err := r.ds.Close(); err != nil {
@@ -51,23 +85,15 @@ func (r *Storage) Close() error {
 
 	r.closed = true
 
-	return r.lockfile.Close()
-}
-
-func (r *Storage) Destroy() error {
-	r.locker.Lock()
-	defer r.locker.Unlock()
-
-	if !r.closed {
-		if err := r.ds.Close(); err != nil {
+	if r.lockFile != nil {
+		if err := r.lockFile.Close(); err != nil {
 			return err
 		}
 
-		r.closed = true
-	}
-
-	if err := r.lockfile.Close(); err != nil {
-		return err
+		lockPath := r.lockFile.Name()
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 
 	return os.RemoveAll(r.path)
@@ -111,15 +137,41 @@ func open(path string) (*Storage, error) {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
-	r.lockfile, err = lockfile.Lock(r.path, LockFile)
+	lockPath := filepath.Join(r.path, LockFile)
+
+	lockFile, err := func() (*lockedfile.File, error) {
+		file, e1 := lockedfile.Create(lockPath)
+		if e1 != nil {
+			if os.IsExist(e1) {
+				if err = os.Remove(lockPath); err != nil {
+					return nil, fmt.Errorf("failed to remove existing lock file: %v", err)
+				}
+
+				return lockedfile.Create(lockPath)
+			}
+			return nil, e1
+		}
+
+		if err = os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+			_ = file.Close()
+			_ = os.Remove(lockPath)
+			return nil, err
+		}
+
+		return file, nil
+	}()
+
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create lock file error: %v", err)
 	}
 
-	keepLocked := false
+	r.lockFile = lockFile
+
+	shouldKeepLock := false
 	defer func() {
-		if !keepLocked {
-			_ = r.lockfile.Close()
+		if !shouldKeepLock {
+			_ = lockFile.Close()
+			_ = os.Remove(lockPath)
 		}
 	}()
 
@@ -131,8 +183,7 @@ func open(path string) (*Storage, error) {
 		return nil, err
 	}
 
-	keepLocked = true
-
+	shouldKeepLock = true
 	return r, nil
 }
 
