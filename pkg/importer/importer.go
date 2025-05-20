@@ -182,25 +182,32 @@ func (imp *Importer) sliceDirectory(filename string) (files.Directory, error) {
 		return nil, err
 	}
 
-	var node files.Node
 	if lstat.IsDir() {
-		node, err = files.NewSerialFile(filename, false, lstat)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		open, e1 := os.Open(filename)
+		node, e1 := files.NewSerialFile(filename, false, lstat)
 		if e1 != nil {
 			return nil, e1
 		}
-		node = files.NewReaderStatFile(open, lstat)
+
+		entries := []files.DirEntry{
+			files.FileEntry(filename, node),
+		}
+
+		return files.NewSliceDirectory(entries), nil
 	}
 
+	open, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	node := files.NewReaderStatFile(open, lstat)
 	entries := []files.DirEntry{
 		files.FileEntry(filename, node),
 	}
 
-	return files.NewSliceDirectory(entries), nil
+	return files.NewSliceDirectory([]files.DirEntry{
+		files.FileEntry("folder", files.NewSliceDirectory(entries)),
+	}), nil
 }
 
 type progressReader struct {
