@@ -202,7 +202,7 @@ func (imp *Importer) sliceDirectory(filename string) (files.Directory, error) {
 
 	node := files.NewReaderStatFile(open, lstat)
 	entries := []files.DirEntry{
-		files.FileEntry(filename, node),
+		files.FileEntry(filepath.Base(filename), node),
 	}
 
 	return files.NewSliceDirectory([]files.DirEntry{
