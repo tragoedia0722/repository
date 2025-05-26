@@ -29,8 +29,7 @@ func (r *Storage) Datastore() Datastore {
 	r.locker.Lock()
 	defer r.locker.Unlock()
 
-	d := r.ds
-	return d
+	return r.ds
 }
 
 func (r *Storage) GetStorageUsage(ctx context.Context) (uint64, error) {
@@ -52,17 +51,7 @@ func (r *Storage) Close() error {
 	}
 
 	r.closed = true
-
-	if r.lockFile != nil {
-		if err := r.lockFile.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("lock file close error: %v", err))
-		}
-
-		lockPath := r.lockFile.Name()
-		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
-			errs = append(errs, fmt.Errorf("remove lock file error: %v", err))
-		}
-	}
+	appendErrors(&errs, r.closeLockFile())
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors during close: %v", errs)
@@ -85,15 +74,9 @@ func (r *Storage) Destroy() error {
 
 	r.closed = true
 
-	if r.lockFile != nil {
-		if err := r.lockFile.Close(); err != nil {
-			return err
-		}
-
-		lockPath := r.lockFile.Name()
-		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	err := r.closeLockFile()
+	if err != nil {
+		return fmt.Errorf("failed to close lock file: %v", err)
 	}
 
 	return os.RemoveAll(r.path)
@@ -104,12 +87,7 @@ func NewStorage(path string) (*Storage, error) {
 		return nil, err
 	}
 
-	storage, err := open(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return storage, nil
+	return open(path)
 }
 
 func initSpec(path string, conf map[string]interface{}) error {
@@ -139,41 +117,11 @@ func open(path string) (*Storage, error) {
 
 	lockPath := filepath.Join(r.path, LockFile)
 
-	lockFile, err := func() (*lockedfile.File, error) {
-		file, e1 := lockedfile.Create(lockPath)
-		if e1 != nil {
-			if os.IsExist(e1) {
-				if err = os.Remove(lockPath); err != nil {
-					return nil, fmt.Errorf("failed to remove existing lock file: %v", err)
-				}
-
-				return lockedfile.Create(lockPath)
-			}
-			return nil, e1
-		}
-
-		if err = os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
-			_ = file.Close()
-			_ = os.Remove(lockPath)
-			return nil, err
-		}
-
-		return file, nil
-	}()
-
+	lockFile, err := createLockFile(lockPath)
 	if err != nil {
-		return nil, fmt.Errorf("create lock file error: %v", err)
+		return nil, err
 	}
-
 	r.lockFile = lockFile
-
-	shouldKeepLock := false
-	defer func() {
-		if !shouldKeepLock {
-			_ = lockFile.Close()
-			_ = os.Remove(lockPath)
-		}
-	}()
 
 	if err = Writable(r.path); err != nil {
 		return nil, err
@@ -183,7 +131,6 @@ func open(path string) (*Storage, error) {
 		return nil, err
 	}
 
-	shouldKeepLock = true
 	return r, nil
 }
 
@@ -222,11 +169,7 @@ func (r *Storage) openDatastore() error {
 		return err
 	}
 
-	r.ds = d
-
-	prefix := "ipfs.storage.datastore"
-	r.ds = measure.New(prefix, r.ds)
-
+	r.ds = measure.New("ipfs.storage.datastore", d)
 	return nil
 }
 
@@ -239,4 +182,43 @@ func (r *Storage) readSpec() (string, error) {
 	}
 
 	return strings.TrimSpace(string(b)), nil
+}
+
+func createLockFile(lockPath string) (*lockedfile.File, error) {
+	lockfile, err := lockedfile.Create(lockPath)
+	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("lock file already exists: %v", err)
+		}
+
+		return nil, err
+	}
+
+	if err = os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		_ = lockfile.Close()
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
+
+	return lockfile, nil
+}
+
+func (r *Storage) closeLockFile() error {
+	if r.lockFile != nil {
+		if err := r.lockFile.Close(); err != nil {
+			return err
+		}
+
+		lockPath := r.lockFile.Name()
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendErrors(errs *[]error, newErr error) {
+	if newErr != nil {
+		*errs = append(*errs, newErr)
+	}
 }
