@@ -2,14 +2,15 @@ package repository
 
 import (
 	"context"
-	"fmt"
 	"github.com/ipfs/boxo/blockstore"
 	blocks "github.com/ipfs/go-block-format"
 	cid2 "github.com/ipfs/go-cid"
+	ipld "github.com/ipfs/go-ipld-format"
 	"github.com/multiformats/go-multicodec"
 	mh "github.com/multiformats/go-multihash"
 	"github.com/tragoedia0722/repository/internal/storage"
 	"os"
+	"time"
 )
 
 type Repository struct {
@@ -76,16 +77,7 @@ func (r *Repository) PutBlockWithCid(ctx context.Context, cid string, bytes []by
 		return err
 	}
 
-	sum, err := r.builder.Sum(bytes)
-	if err != nil {
-		return err
-	}
-
-	if sum.Hash().String() != c.Hash().String() {
-		return fmt.Errorf("cid hash mismatch: expected %s, got %s", c.Hash(), sum.Hash())
-	}
-
-	blk, err := blocks.NewBlockWithCid(bytes, sum)
+	blk, err := blocks.NewBlockWithCid(bytes, c)
 	if err != nil {
 		return err
 	}
@@ -177,12 +169,22 @@ func (r *Repository) GetRawData(ctx context.Context, cid string) ([]byte, error)
 		return nil, err
 	}
 
-	blk, err := r.blockStore.Get(ctx, c)
-	if err != nil {
-		return nil, err
+	var lastErr error
+	for retry := 0; retry < 3; retry++ {
+		blk, e1 := r.blockStore.Get(ctx, c)
+		if e1 == nil {
+			return blk.RawData(), nil
+		}
+
+		lastErr = err
+		if !ipld.IsNotFound(err) {
+			return nil, err
+		}
+
+		time.Sleep(50 * time.Millisecond)
 	}
 
-	return blk.RawData(), nil
+	return nil, lastErr
 }
 
 func (r *Repository) DelBlock(ctx context.Context, cid string) error {
