@@ -21,16 +21,13 @@ import (
 )
 
 const (
-	invalidChars       = `/` + "\x00"
-	maxConcurrency     = 8
-	largeFileThreshold = 100 * 1024 * 1024
-	writeBufferSize    = 4 * 1024 * 1024
+	invalidChars    = `/` + "\x00"
+	writeBufferSize = 4 * 1024 * 1024
 )
 
 var (
-	ErrInvalidDirectoryEntry = errors.New("invalid directory entry name")
-	ErrPathExistsOverwrite   = errors.New("path already exists and overwriting is not allowed")
-	ErrPathTraversal         = errors.New("extraction path escapes base directory")
+	ErrPathExistsOverwrite = errors.New("path already exists and overwriting is not allowed")
+	ErrPathTraversal       = errors.New("extraction path escapes base directory")
 )
 
 type progressCallback func(completed, total int64, currentFile string)
@@ -225,13 +222,6 @@ func (ext *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, 
 }
 
 func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIterator, path string, allowOverwrite bool, relativePath string) error {
-	var wg sync.WaitGroup
-	errCh := make(chan error, 1)
-	sem := make(chan struct{}, maxConcurrency)
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	for entries.Next() {
 		select {
 		case <-ctx.Done():
@@ -241,62 +231,19 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 
 		entryName := entries.Name()
 		if entryName == "" || entryName == "." || entryName == ".." || !ext.isValidFilename(entryName) {
-			return ErrInvalidDirectoryEntry
+			return fmt.Errorf("invalid directory entry name: %s", entryName)
 		}
 
 		childPath := filepath.Join(path, entryName)
 		childRelPath := filepath.Join(relativePath, entryName)
 		entryNode := entries.Node()
 
-		fileNode, isFile := entryNode.(files.File)
-		if _, isSymlink := entryNode.(*files.Symlink); isSymlink || (isFile && ext.isLargeFile(fileNode)) {
-			if err := ext.writeTo(ctx, entryNode, childPath, allowOverwrite, childRelPath); err != nil {
-				return err
-			}
-
-			continue
+		if err := ext.writeTo(ctx, entryNode, childPath, allowOverwrite, childRelPath); err != nil {
+			return err
 		}
-
-		wg.Add(1)
-		sem <- struct{}{}
-
-		go func(n files.Node, p, rp string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			if err := ext.writeTo(ctx, n, p, allowOverwrite, rp); err != nil {
-				select {
-				case errCh <- err:
-					cancel()
-				default:
-				}
-			}
-		}(entryNode, childPath, childRelPath)
 	}
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
-
-	if err := entries.Err(); err != nil {
-		return err
-	}
-
-	if err, ok := <-errCh; ok {
-		return err
-	}
-
-	return nil
-}
-
-func (ext *Extractor) isLargeFile(file files.File) bool {
-	size, err := file.Size()
-	if err != nil {
-		return false
-	}
-
-	return size > largeFileThreshold
+	return entries.Err()
 }
 
 func (*Extractor) createNewFile(path string) (*os.File, error) {
