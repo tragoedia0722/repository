@@ -6,14 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path"
-	"path/filepath"
-	"sort"
-	"strings"
-	"sync/atomic"
-
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	chunk "github.com/ipfs/boxo/chunker"
@@ -26,6 +18,14 @@ import (
 	"github.com/ipfs/go-cid"
 	ipld "github.com/ipfs/go-ipld-format"
 	"github.com/multiformats/go-multicodec"
+	"github.com/tragoedia0722/repository/pkg/helper"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -95,7 +95,16 @@ func (imp *Importer) updateProgress(size int64, filename string) {
 
 func (imp *Importer) Import(ctx context.Context) (*Result, error) {
 	bs := blockservice.New(imp.blockStore, nil)
-	filename := filepath.Base(imp.path)
+
+	originalFilename := filepath.Base(imp.path)
+	cleanFilename := helper.CleanFilename(originalFilename)
+	if cleanFilename == "" {
+		if strings.Contains(originalFilename, ".") {
+			cleanFilename = "unnamed_file" + filepath.Ext(originalFilename)
+		} else {
+			cleanFilename = "unnamed_file"
+		}
+	}
 
 	imp.dagService = merkledag.NewDAGService(bs)
 	imp.bufferedDS = ipld.NewBufferedDAG(ctx, imp.dagService, ipld.MaxSizeBatchOption(100<<20))
@@ -152,7 +161,7 @@ func (imp *Importer) Import(ctx context.Context) (*Result, error) {
 	}
 
 	return &Result{
-		FileName: filename,
+		FileName: cleanFilename,
 		Size:     size,
 		RootCid:  node.Cid().String(),
 		Packages: packages,
@@ -188,8 +197,14 @@ func (imp *Importer) sliceDirectory(filename string) (files.Directory, error) {
 			return nil, e1
 		}
 
+		originalDirName := filepath.Base(filename)
+		cleanDirName := helper.CleanFilename(originalDirName)
+		if cleanDirName == "" {
+			cleanDirName = "unnamed_directory"
+		}
+
 		entries := []files.DirEntry{
-			files.FileEntry(filename, node),
+			files.FileEntry(cleanDirName, node),
 		}
 
 		return files.NewSliceDirectory(entries), nil
@@ -201,8 +216,20 @@ func (imp *Importer) sliceDirectory(filename string) (files.Directory, error) {
 	}
 
 	node := files.NewReaderStatFile(open, lstat)
+
+	originalName := filepath.Base(filename)
+	cleanFileName := helper.CleanFilename(originalName)
+	if cleanFileName == "" {
+		ext := filepath.Ext(originalName)
+		if ext != "" {
+			cleanFileName = "unnamed_file" + ext
+		} else {
+			cleanFileName = "unnamed_file"
+		}
+	}
+
 	entries := []files.DirEntry{
-		files.FileEntry(filepath.Base(filename), node),
+		files.FileEntry(cleanFileName, node),
 	}
 
 	return files.NewSliceDirectory([]files.DirEntry{
@@ -334,7 +361,23 @@ func (imp *Importer) addDir(ctx context.Context, dirPath string, dir files.Direc
 		default:
 		}
 
-		entryPath := filepath.Join(dirPath, it.Name())
+		originalName := it.Name()
+		cleanName := helper.CleanFilename(originalName)
+
+		if cleanName == "" {
+			if _, isDir := it.Node().(files.Directory); isDir {
+				cleanName = "unnamed_directory"
+			} else {
+				ext := filepath.Ext(originalName)
+				if ext != "" {
+					cleanName = "unnamed_file" + ext
+				} else {
+					cleanName = "unnamed_file"
+				}
+			}
+		}
+
+		entryPath := filepath.Join(dirPath, cleanName)
 		if err := imp.addNode(ctx, entryPath, it.Node(), false); err != nil {
 			return err
 		}
@@ -372,15 +415,25 @@ func (imp *Importer) addFile(ctx context.Context, path string, file files.File) 
 		name = filepath.Base(path)
 	}
 
+	displayName := helper.CleanFilename(name)
+	if displayName == "" {
+		ext := filepath.Ext(name)
+		if ext != "" {
+			displayName = "unnamed_file" + ext
+		} else {
+			displayName = "unnamed_file"
+		}
+	}
+
 	imp.Contents = append(imp.Contents, Content{
-		Name: name,
+		Name: displayName,
 		Size: size,
 	})
 
 	pr := &progressReader{
 		reader: file,
 		onProgress: func(n int64) {
-			imp.updateProgress(n, name)
+			imp.updateProgress(n, displayName)
 		},
 	}
 
@@ -409,12 +462,12 @@ func (imp *Importer) add(ctx context.Context, reader io.Reader) (ipld.Node, erro
 		NoCopy:     false,
 	}
 
-	helper, err := params.New(splitter)
+	param, err := params.New(splitter)
 	if err != nil {
 		return nil, err
 	}
 
-	nd, err := balanced.Layout(helper)
+	nd, err := balanced.Layout(param)
 	if err != nil {
 		return nil, err
 	}

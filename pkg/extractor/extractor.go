@@ -11,19 +11,16 @@ import (
 	"github.com/ipfs/boxo/ipld/merkledag"
 	unixfile "github.com/ipfs/boxo/ipld/unixfs/file"
 	"github.com/ipfs/go-cid"
+	"github.com/tragoedia0722/repository/pkg/helper"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 )
 
-const (
-	invalidChars    = `/` + "\x00"
-	writeBufferSize = 4 * 1024 * 1024
-)
+const writeBufferSize = 4 * 1024 * 1024
 
 var (
 	ErrPathExistsOverwrite = errors.New("path already exists and overwriting is not allowed")
@@ -230,7 +227,12 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 		}
 
 		entryName := entries.Name()
-		if entryName == "" || entryName == "." || entryName == ".." || !ext.isValidFilename(entryName) {
+		if entryName == "" || entryName == "." || entryName == ".." {
+			return fmt.Errorf("invalid directory entry name: %s", entryName)
+		}
+
+		entryName = helper.CleanFilename(entryName)
+		if entryName == "" {
 			return fmt.Errorf("invalid directory entry name: %s", entryName)
 		}
 
@@ -253,37 +255,6 @@ func (*Extractor) createNewFile(path string) (*os.File, error) {
 	}
 
 	return os.OpenFile(path, os.O_EXCL|os.O_CREATE|os.O_WRONLY, 0o644)
-}
-
-func (*Extractor) isValidFilename(filename string) bool {
-	if strings.ContainsAny(filename, invalidChars) {
-		return false
-	}
-
-	for _, r := range filename {
-		if !unicode.IsPrint(r) {
-			return false
-		}
-	}
-
-	lowerName := strings.ToLower(filename)
-	if lowerName == "con" || lowerName == "prn" || lowerName == "aux" ||
-		lowerName == "nul" || strings.HasPrefix(lowerName, "com") ||
-		strings.HasPrefix(lowerName, "lpt") {
-		if len(lowerName) <= 4 {
-			n := lowerName
-			if strings.HasPrefix(n, "com") || strings.HasPrefix(n, "lpt") {
-				n = n[3:]
-				if n == "" || (len(n) == 1 && n[0] >= '0' && n[0] <= '9') {
-					return false
-				}
-			} else {
-				return false
-			}
-		}
-	}
-
-	return true
 }
 
 func (*Extractor) isDir(nd files.Node) bool {
