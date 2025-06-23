@@ -26,10 +26,10 @@ func DatastoreSpecPath(repoPath string) string {
 }
 
 func FileExists(filename string) bool {
-	fi, err := os.Lstat(filename)
-	if fi != nil || (err != nil && !os.IsNotExist(err)) {
-		return true
+	fi, err := os.Stat(filename)
+	if err != nil {
+		return false
 	}
 
-	return false
+	return fi.Size() > 0
 }
