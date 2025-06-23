@@ -130,6 +130,18 @@ func (imp *Importer) Import(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 
+	if err = imp.bufferedDS.Commit(); err != nil {
+		return nil, err
+	}
+
+	if imp.root != nil {
+		if err = imp.root.FlushMemFree(ctx); err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, errors.New("mfs root is nil")
+	}
+
 	cidSet := cid.NewSet()
 	if err = merkledag.Walk(ctx, merkledag.GetLinksWithDAG(imp.dagService), node.Cid(), func(c cid.Cid) bool {
 		return cidSet.Visit(c)
