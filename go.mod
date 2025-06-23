@@ -1,6 +1,6 @@
 module github.com/tragoedia0722/repository
 
-go 1.24.0
+go 1.24.1
 
 require (
 	github.com/ipfs/boxo v0.30.0

@@ -194,7 +194,8 @@ func createLockFile(lockPath string) (*lockedfile.File, error) {
 		return nil, err
 	}
 
-	if err = os.WriteFile(lockPath, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+	pidBytes := []byte(strconv.Itoa(os.Getpid()))
+	if _, err = lockfile.Write(pidBytes); err != nil {
 		_ = lockfile.Close()
 		_ = os.Remove(lockPath)
 		return nil, err
