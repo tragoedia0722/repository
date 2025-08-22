@@ -6,6 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync/atomic"
+
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	chunk "github.com/ipfs/boxo/chunker"
@@ -19,13 +26,6 @@ import (
 	ipld "github.com/ipfs/go-ipld-format"
 	"github.com/multiformats/go-multicodec"
 	"github.com/tragoedia0722/repository/pkg/helper"
-	"io"
-	"os"
-	"path"
-	"path/filepath"
-	"sort"
-	"strings"
-	"sync/atomic"
 )
 
 const (
@@ -497,7 +497,7 @@ func (imp *Importer) putNode(ctx context.Context, node ipld.Node, filePath strin
 		return err
 	}
 
-	dir := path.Dir(filePath)
+	dir := filepath.Dir(filePath)
 	if dir != "." {
 		opts := mfs.MkdirOpts{
 			Mkparents:  true,

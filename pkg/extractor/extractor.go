@@ -5,6 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	"github.com/ipfs/boxo/files"
@@ -12,12 +19,6 @@ import (
 	unixfile "github.com/ipfs/boxo/ipld/unixfs/file"
 	"github.com/ipfs/go-cid"
 	"github.com/tragoedia0722/repository/pkg/helper"
-	"io"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 const writeBufferSize = 4 * 1024 * 1024
@@ -231,13 +232,27 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 			return fmt.Errorf("invalid directory entry name: %s", entryName)
 		}
 
-		entryName = helper.CleanFilename(entryName)
-		if entryName == "" {
-			return fmt.Errorf("invalid directory entry name: %s", entryName)
+		var childPath, childRelPath string
+
+		if strings.Contains(entryName, "\\") {
+			normalizedPath := strings.ReplaceAll(entryName, "\\", string(filepath.Separator))
+			childPath = filepath.Join(path, normalizedPath)
+			childRelPath = filepath.Join(relativePath, normalizedPath)
+
+			parentDir := filepath.Dir(childPath)
+			if err := os.MkdirAll(parentDir, 0o755); err != nil {
+				return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
+			}
+		} else {
+			cleanName := helper.CleanFilename(entryName)
+			if cleanName == "" {
+				return fmt.Errorf("invalid directory entry name: %s", entryName)
+			}
+
+			childPath = filepath.Join(path, cleanName)
+			childRelPath = filepath.Join(relativePath, cleanName)
 		}
 
-		childPath := filepath.Join(path, entryName)
-		childRelPath := filepath.Join(relativePath, entryName)
 		entryNode := entries.Node()
 
 		if err := ext.writeTo(ctx, entryNode, childPath, allowOverwrite, childRelPath); err != nil {
