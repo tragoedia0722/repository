@@ -2,9 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"sort"
+
 	ds "github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/mount"
-	"sort"
 )
 
 type mountDatastoreConfig struct {

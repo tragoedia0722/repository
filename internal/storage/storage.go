@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	ds "github.com/ipfs/go-datastore"
-	measure "github.com/ipfs/go-ds-measure"
-	"github.com/mitchellh/go-homedir"
-	"github.com/rogpeppe/go-internal/lockedfile"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+
+	ds "github.com/ipfs/go-datastore"
+	measure "github.com/ipfs/go-ds-measure"
+	"github.com/mitchellh/go-homedir"
+	"github.com/rogpeppe/go-internal/lockedfile"
 )
 
 const LockFile = ".storage.lock"

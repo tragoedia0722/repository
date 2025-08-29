@@ -523,7 +523,7 @@ func (imp *Importer) mfsRoot(ctx context.Context) (*mfs.Root, error) {
 		return nil, err
 	}
 
-	mr, err := mfs.NewRoot(ctx, imp.dagService, protoNode, nil)
+	mr, err := mfs.NewRoot(ctx, imp.dagService, protoNode, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -2,9 +2,10 @@ package storage
 
 import (
 	"fmt"
+	"path/filepath"
+
 	levelds "github.com/ipfs/go-ds-leveldb"
 	ldbopts "github.com/syndtr/goleveldb/leveldb/opt"
-	"path/filepath"
 )
 
 type levelDBDatastoreConfig struct {

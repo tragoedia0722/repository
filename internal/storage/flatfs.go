@@ -2,8 +2,9 @@ package storage
 
 import (
 	"fmt"
-	flatfs "github.com/ipfs/go-ds-flatfs"
 	"path/filepath"
+
+	flatfs "github.com/ipfs/go-ds-flatfs"
 )
 
 type flatFsDatastoreConfig struct {
