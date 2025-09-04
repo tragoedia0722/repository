@@ -5,9 +5,19 @@ import (
 	"unicode"
 )
 
-const invalidChars = `/` + "\x00"
+const invalidChars = `<>:"/\|?*` + "\x00"
+
+var reservedNames = []string{
+	"con", "prn", "aux", "nul",
+	"com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+	"lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+}
 
 func CleanFilename(filename string) string {
+	if filename == "" {
+		return "unnamed_file"
+	}
+
 	cleaned := strings.Map(func(r rune) rune {
 		switch {
 		case r == 0x200E || r == 0x200F:
@@ -42,6 +52,9 @@ func CleanFilename(filename string) string {
 			return ' '
 
 		case strings.ContainsRune(invalidChars, r):
+			return '_'
+
+		case r >= 0 && r <= 31 && r != '\t':
 			return -1
 
 		case !unicode.IsPrint(r):
@@ -54,7 +67,15 @@ func CleanFilename(filename string) string {
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
 	cleaned = strings.TrimSpace(cleaned)
 
+	cleaned = strings.TrimRight(cleaned, ". ")
+
 	cleaned = HandleReservedNames(cleaned)
+
+	cleaned = TruncateFilename(cleaned, 255)
+
+	if cleaned == "" {
+		cleaned = "unnamed_file"
+	}
 
 	return cleaned
 }
@@ -68,26 +89,43 @@ func HandleReservedNames(filename string) string {
 	nameWithoutExt := lowerName
 	extName := ""
 
-	if dotIndex := strings.LastIndex(lowerName, "."); dotIndex > 0 {
-		nameWithoutExt = lowerName[:dotIndex]
+	if dotIndex := strings.LastIndex(filename, "."); dotIndex > 0 && dotIndex < len(filename)-1 {
+		nameWithoutExt = strings.ToLower(filename[:dotIndex])
 		extName = filename[dotIndex:]
 	}
 
-	reservedNames := []string{"con", "prn", "aux", "nul"}
 	for _, reserved := range reservedNames {
 		if nameWithoutExt == reserved {
-			return reserved + "_file" + extName
-		}
-	}
-
-	if strings.HasPrefix(nameWithoutExt, "com") || strings.HasPrefix(nameWithoutExt, "lpt") {
-		if len(nameWithoutExt) == 4 {
-			suffix := nameWithoutExt[3:]
-			if len(suffix) == 1 && suffix[0] >= '1' && suffix[0] <= '9' {
-				return nameWithoutExt + "_file" + extName
+			originalName := filename
+			if extName != "" {
+				originalName = filename[:len(filename)-len(extName)]
 			}
+			return originalName + "_file" + extName
 		}
 	}
 
 	return filename
+}
+
+func TruncateFilename(filename string, maxLength int) string {
+	if len(filename) <= maxLength {
+		return filename
+	}
+
+	dotIndex := strings.LastIndex(filename, ".")
+	if dotIndex <= 0 || dotIndex == len(filename)-1 {
+		return filename[:maxLength]
+	}
+
+	ext := filename[dotIndex:]
+	name := filename[:dotIndex]
+
+	minNameLength := 1
+	maxNameLength := maxLength - len(ext)
+
+	if maxNameLength < minNameLength {
+		return filename[:maxLength]
+	}
+
+	return name[:maxNameLength] + ext
 }

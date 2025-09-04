@@ -45,11 +45,29 @@ type Extractor struct {
 func NewExtractor(blockStore blockstore.Blockstore, cid string, path string) *Extractor {
 	cleanPath := filepath.Clean(path)
 
+	pathParts := strings.Split(cleanPath, string(filepath.Separator))
+	cleanedParts := make([]string, 0, len(pathParts))
+
+	for _, part := range pathParts {
+		if part == "" {
+			cleanedParts = append(cleanedParts, part)
+			continue
+		}
+
+		cleanPart := helper.CleanFilename(part)
+		if cleanPart == "" {
+			cleanPart = "cleaned_dir"
+		}
+		cleanedParts = append(cleanedParts, cleanPart)
+	}
+
+	finalPath := strings.Join(cleanedParts, string(filepath.Separator))
+
 	return &Extractor{
 		blockStore: blockStore,
 		cid:        cid,
-		path:       cleanPath,
-		basePath:   cleanPath,
+		path:       finalPath,
+		basePath:   finalPath,
 		bufferPool: sync.Pool{
 			New: func() interface{} {
 				return make([]byte, writeBufferSize)
@@ -235,9 +253,32 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 		var childPath, childRelPath string
 
 		if strings.Contains(entryName, "\\") {
-			normalizedPath := strings.ReplaceAll(entryName, "\\", string(filepath.Separator))
-			childPath = filepath.Join(path, normalizedPath)
-			childRelPath = filepath.Join(relativePath, normalizedPath)
+			normalizedPath := strings.ReplaceAll(entryName, "\\", "/")
+			pathParts := strings.Split(normalizedPath, "/")
+
+			cleanedParts := make([]string, 0, len(pathParts))
+			for _, part := range pathParts {
+				if part == "" || part == "." {
+					continue
+				}
+				if part == ".." {
+					return fmt.Errorf("path traversal attempt: %s", entryName)
+				}
+
+				cleanPart := helper.CleanFilename(part)
+				if cleanPart == "" {
+					return fmt.Errorf("invalid path component: %s", part)
+				}
+				cleanedParts = append(cleanedParts, cleanPart)
+			}
+
+			if len(cleanedParts) == 0 {
+				return fmt.Errorf("no valid path components: %s", entryName)
+			}
+
+			cleanedPath := strings.Join(cleanedParts, string(filepath.Separator))
+			childPath = filepath.Join(path, cleanedPath)
+			childRelPath = filepath.Join(relativePath, cleanedPath)
 
 			parentDir := filepath.Dir(childPath)
 			if err := os.MkdirAll(parentDir, 0o755); err != nil {
