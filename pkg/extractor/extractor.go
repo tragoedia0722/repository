@@ -1,7 +1,6 @@
 package extractor
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -158,12 +157,22 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 			return ErrPathExistsOverwrite
 		}
 
-		fi, e1 := os.Stat(path)
+		fi, e1 := os.Lstat(path)
 		if e1 != nil {
 			return e1
 		}
 
-		if !(fi.IsDir() && ext.isDir(nd)) {
+		isNodeDir := ext.isDir(nd)
+
+		if fi.IsDir() && isNodeDir {
+			// pass
+		} else {
+			if fi.Mode().IsRegular() && !isNodeDir {
+				if size, _ := nd.Size(); fi.Size() == size {
+					ext.updateProgress(size, relativePath)
+					return nil
+				}
+			}
 			if err = os.RemoveAll(path); err != nil {
 				return fmt.Errorf("failed to remove existing path: %w", err)
 			}
@@ -178,36 +187,71 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 		if !ext.isValidSymlinkTarget(target) {
 			return fmt.Errorf("invalid symlink target: %s", target)
 		}
-
 		return os.Symlink(target, path)
+
 	case files.File:
 		return ext.writeFileWithBuffer(ctx, node, path, relativePath)
+
 	case files.Directory:
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return err
 		}
-
 		entries := node.Entries()
-
 		return ext.processDirectory(ctx, entries, path, allowOverwrite, relativePath)
+
 	default:
 		return fmt.Errorf("file type %T at %q is not supported", node, path)
 	}
 }
 
+func (*Extractor) createPartFile(finalPath string) (*os.File, string, error) {
+	dir := filepath.Dir(finalPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", err
+	}
+
+	partPath := finalPath + ".part"
+
+	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err == nil {
+		return f, partPath, nil
+	}
+	if !os.IsExist(err) {
+		return nil, "", err
+	}
+
+	if remErr := os.Remove(partPath); remErr != nil && !os.IsNotExist(remErr) {
+		return nil, "", remErr
+	}
+	f, err = os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return f, partPath, nil
+}
+
 func (ext *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, path string, relativePath string) error {
-	f, err := ext.createNewFile(path)
+	tmpF, tmpPath, err := ext.createPartFile(path)
 	if err != nil {
 		return err
 	}
 
+	var retErr error
 	defer func() {
-		if closeErr := f.Close(); closeErr != nil && err == nil {
-			err = closeErr
+		if tmpF != nil {
+			_ = tmpF.Close()
+		}
+		if retErr != nil {
+			_ = os.Remove(tmpPath)
 		}
 	}()
 
-	buf := bufio.NewWriterSize(f, writeBufferSize)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 
 	pr := &extractReader{
 		r: node,
@@ -216,25 +260,32 @@ func (ext *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, 
 		},
 	}
 
-	done := make(chan struct{})
-	var copyErr error
+	buf := ext.bufferPool.Get().([]byte)
+	defer ext.bufferPool.Put(buf)
 
-	go func() {
-		defer close(done)
-		_, copyErr = io.Copy(buf, pr)
-	}()
-
-	select {
-	case <-ctx.Done():
-		ext.isInterrupted = true
-		return ctx.Err()
-	case <-done:
-		if copyErr != nil {
-			return copyErr
-		}
+	_, copyErr := io.CopyBuffer(tmpF, pr, buf)
+	if copyErr != nil {
+		retErr = copyErr
+		return retErr
 	}
 
-	return buf.Flush()
+	if err = tmpF.Sync(); err != nil {
+		retErr = err
+		return retErr
+	}
+
+	if err = tmpF.Close(); err != nil {
+		retErr = err
+		return retErr
+	}
+	tmpF = nil
+
+	if err = os.Rename(tmpPath, path); err != nil {
+		retErr = err
+		return retErr
+	}
+
+	return nil
 }
 
 func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIterator, path string, allowOverwrite bool, relativePath string) error {
