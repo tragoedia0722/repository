@@ -177,12 +177,12 @@ func (r *Repository) GetRawData(ctx context.Context, cid string) ([]byte, error)
 			return blk.RawData(), nil
 		}
 
-		lastErr = err
-		if !ipld.IsNotFound(err) {
-			return nil, err
+		lastErr = e1
+		if !ipld.IsNotFound(e1) {
+			return nil, e1
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	return nil, lastErr
