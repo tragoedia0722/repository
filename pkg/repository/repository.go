@@ -20,6 +20,31 @@ type Repository struct {
 	builder    cid2.Builder
 }
 
+func NewIdRepository(path string) (*Repository, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err = os.MkdirAll(path, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	s, err := storage.NewStorage(path)
+	if err != nil {
+		return nil, err
+	}
+
+	base := blockstore.NewBlockstore(s.Datastore(), blockstore.NoPrefix())
+
+	return &Repository{
+		storage:    s,
+		blockStore: blockstore.NewIdStore(base),
+		builder: cid2.V1Builder{
+			Codec:    uint64(multicodec.DagPb),
+			MhType:   mh.SHA2_256,
+			MhLength: -1,
+		},
+	}, nil
+}
+
 func NewRepository(path string) (*Repository, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err = os.MkdirAll(path, os.ModePerm); err != nil {
