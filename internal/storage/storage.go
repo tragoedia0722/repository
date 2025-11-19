@@ -124,6 +124,12 @@ func open(path string) (*Storage, error) {
 	}
 	r.lockFile = lockFile
 
+	defer func(e *error) {
+		if *e != nil {
+			_ = r.lockFile.Close()
+		}
+	}(&err)
+
 	if err = Writable(r.path); err != nil {
 		return nil, err
 	}
