@@ -400,8 +400,8 @@ func TestImporter_updateProgress(t *testing.T) {
 		lastFile = currentFile
 	})
 
-	// Set total size first
-	imp.totalSize = 1000
+	// Create tracker with total size
+	imp.tracker = newProgressTracker(1000, imp.progress)
 	imp.updateProgress(100, "test.txt")
 
 	if lastCompleted != 100 {
