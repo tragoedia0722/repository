@@ -2,130 +2,141 @@ package helper
 
 import (
 	"strings"
-	"unicode"
+	"unicode/utf8"
 )
 
-const invalidChars = `<>:"/\|?*` + "\x00"
-
-var reservedNames = []string{
-	"con", "prn", "aux", "nul",
-	"com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-	"lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-}
-
+// CleanFilename 清理文件名，使其适合在 Windows 文件系统中使用
+//
+// 本函数执行以下操作：
+//  1. 移除无效字符 (<, >, :, ", /, \, |, ?, *, 等)
+//  2. 移除控制字符和 Unicode 控制码
+//  3. 标准化空格字符（合并连续空格）
+//  4. 处理 Windows 保留的设备名（CON, PRN, AUX, 等）
+//  5. 截断过长的文件名（255 字符）
+//
+// 参数：
+//
+//	filename - 要清理的文件名
+//
+// 返回：
+//
+//	清理后的文件名，如果输入为空返回 "unnamed_file"
+//
+// 示例：
+//
+//	CleanFilename("test<>:file.txt")    // "test___file.txt"
+//	CleanFilename("CON.txt")            // "CON_file.txt"
+//	CleanFilename("测试文件.txt")        // "测试文件.txt"
+//	CleanFilename("file   name.txt")    // "file name.txt"
+//	CleanFilename("")                    // "unnamed_file"
 func CleanFilename(filename string) string {
 	if filename == "" {
-		return "unnamed_file"
+		return DefaultFilename
 	}
 
-	cleaned := strings.Map(func(r rune) rune {
-		switch {
-		case r == 0x200E || r == 0x200F:
-			return -1
-		case r >= 0x202A && r <= 0x202E:
-			return -1
+	// 步骤 1: 清理字符（移除和替换）
+	cleaned := cleanChars(filename)
 
-		case r == 0x200B || r == 0x200C || r == 0x200D:
-			return -1
-		case r == 0x2060 || r == 0xFEFF:
-			return -1
+	// 步骤 2: 标准化空格（合并连续空格，修剪首尾）
+	cleaned = normalizeSpaces(cleaned)
 
-		case r == 0x00A0:
-			return ' '
-		case r == 0x3000:
-			return ' '
-		case r >= 0x2000 && r <= 0x200A:
-			return ' '
-		case r == 0x2007 || r == 0x2008 || r == 0x205F:
-			return ' '
-
-		case r == 0x00AD:
-			return -1
-		case r == 0x034F:
-			return -1
-		case r == 0x061C:
-			return -1
-		case r == 0x180E:
-			return -1
-
-		case r == 0x2028 || r == 0x2029:
-			return ' '
-
-		case strings.ContainsRune(invalidChars, r):
-			return '_'
-
-		case r >= 0 && r <= 31 && r != '\t':
-			return -1
-
-		case !unicode.IsPrint(r):
-			return -1
-		}
-
-		return r
-	}, filename)
-
-	cleaned = strings.Join(strings.Fields(cleaned), " ")
-	cleaned = strings.TrimSpace(cleaned)
-
+	// 步骤 3: 修剪尾部空格和点（第二次修剪，确保干净）
 	cleaned = strings.TrimRight(cleaned, ". ")
 
+	// 步骤 4: 处理 Windows 保留名
 	cleaned = HandleReservedNames(cleaned)
 
-	cleaned = TruncateFilename(cleaned, 255)
+	// 步骤 5: 截断过长的文件名
+	cleaned = TruncateFilename(cleaned, MaxFilenameLength)
 
+	// 最终检查：如果结果为空，返回默认文件名
 	if cleaned == "" {
-		cleaned = "unnamed_file"
+		return DefaultFilename
 	}
 
 	return cleaned
 }
 
-func HandleReservedNames(filename string) string {
-	if filename == "" {
-		return ""
-	}
-
-	lowerName := strings.ToLower(filename)
-	nameWithoutExt := lowerName
-	extName := ""
-
-	if dotIndex := strings.LastIndex(filename, "."); dotIndex > 0 && dotIndex < len(filename)-1 {
-		nameWithoutExt = strings.ToLower(filename[:dotIndex])
-		extName = filename[dotIndex:]
-	}
-
-	for _, reserved := range reservedNames {
-		if nameWithoutExt == reserved {
-			originalName := filename
-			if extName != "" {
-				originalName = filename[:len(filename)-len(extName)]
-			}
-			return originalName + "_file" + extName
-		}
-	}
-
-	return filename
-}
-
+// TruncateFilename 截断文件名到指定最大长度
+// 如果文件名有扩展名，会尝试保留扩展名，只截断主文件名部分
+//
+// 参数：
+//
+//	filename - 要截断的文件名
+//	maxLength - 最大长度（通常为 255）
+//
+// 返回：
+//
+//	截断后的文件名，如果不超过 maxLength 则原样返回
+//
+// 截断策略：
+//   - 如果没有扩展名：直接截断到 maxLength
+//   - 如果有扩展名：优先保留扩展名，截断主文件名部分
+//   - 如果扩展名太长：无法保留完整扩展名时，截断整个文件名
+//   - **重要**：始终在 UTF-8 字符边界处截断，不会产生无效的 UTF-8 序列
+//
+// 示例：
+//
+//	TruncateFilename("verylongfilename.txt", 15)  // "verylongfil.txt"
+//	TruncateFilename("文件名称.txt", 8)            // "文件.txt" (不破坏 UTF-8)
+//	TruncateFilename("normal.txt", 255)           // "normal.txt"
 func TruncateFilename(filename string, maxLength int) string {
+	// 如果文件名长度不超过最大长度，直接返回
 	if len(filename) <= maxLength {
 		return filename
 	}
 
+	// 查找最后一个点（扩展名分隔符）
 	dotIndex := strings.LastIndex(filename, ".")
+
+	// 没有点，点在开头，或点在末尾
 	if dotIndex <= 0 || dotIndex == len(filename)-1 {
-		return filename[:maxLength]
+		// 安全截断整个文件名
+		return safeTruncate(filename, maxLength)
 	}
 
-	ext := filename[dotIndex:]
-	name := filename[:dotIndex]
+	// 分离主文件名和扩展名
+	ext := filename[dotIndex:]  // 包含点的扩展名
+	name := filename[:dotIndex] // 主文件名
 
+	// 计算主文件名可用长度
 	minNameLength := 1
 	maxNameLength := maxLength - len(ext)
 
+	// 如果扩展名太长，无法保留
 	if maxNameLength < minNameLength {
-		return filename[:maxLength]
+		return safeTruncate(filename, maxLength)
 	}
 
-	return name[:maxNameLength] + ext
+	// 安全截断主文件名，保留扩展名
+	return safeTruncate(name, maxNameLength) + ext
+}
+
+// safeTruncate 安全地截断字符串到指定字节长度
+// 确保不会在多字节 UTF-8 字符的中间进行切割
+//
+// 参数：
+//
+//	s - 要截断的字符串
+//	maxLen - 最大字节长度
+//
+// 返回：
+//
+//	截断后的字符串，保证是有效的 UTF-8
+//
+// 如果无法在指定长度内找到有效的 UTF-8 边界，返回空字符串
+func safeTruncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+
+	// 从 maxLen 开始向前查找最后一个有效的 UTF-8 边界
+	for i := maxLen; i > 0; i-- {
+		if utf8.ValidString(s[:i]) {
+			return s[:i]
+		}
+	}
+
+	// 如果找不到有效边界（极少见），返回空字符串
+	return ""
 }

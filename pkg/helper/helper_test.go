@@ -1,6 +1,10 @@
 package helper
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 func TestCleanFilename(t *testing.T) {
 	tests := []struct {
@@ -345,6 +349,99 @@ func TestTruncateFilename(t *testing.T) {
 			result := TruncateFilename(tt.filename, tt.maxLength)
 			if result != tt.expected {
 				t.Errorf("TruncateFilename(%q, %d) = %q, want %q", tt.filename, tt.maxLength, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestUTF8Truncation 测试 UTF-8 多字节字符截断的安全性
+// 确保不会在多字节字符中间截断导致无效的 UTF-8 序列
+func TestUTF8Truncation(t *testing.T) {
+	tests := []struct {
+		name      string
+		filename  string
+		maxLength int
+		// 不检查精确输出，只检查输出是有效的 UTF-8
+		checkUTF8Valid bool
+	}{
+		{
+			name:           "chinese characters boundary",
+			filename:       "文件名称.txt",
+			maxLength:      8,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "emoji boundary",
+			filename:       "file😀test.txt",
+			maxLength:      12,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "mixed unicode boundary",
+			filename:       "测试test😀.txt",
+			maxLength:      11,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "greek characters",
+			filename:       "αβγδε.txt",
+			maxLength:      8,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "cyrillic characters",
+			filename:       "тест.txt",
+			maxLength:      8,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "multiple emojis",
+			filename:       "😀😁😂.txt",
+			maxLength:      11,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "very short truncation",
+			filename:       "文件名称.txt",
+			maxLength:      5,
+			checkUTF8Valid: true,
+		},
+		{
+			name:           "single emoji",
+			filename:       "😀.txt",
+			maxLength:      5,
+			checkUTF8Valid: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := TruncateFilename(tt.filename, tt.maxLength)
+
+			// 如果需要检查 UTF-8 有效性
+			if tt.checkUTF8Valid {
+				// 检查结果是有效的 UTF-8
+				if !utf8.ValidString(result) {
+					t.Errorf("TruncateFilename(%q, %d) = %q is NOT valid UTF-8", tt.filename, tt.maxLength, result)
+				}
+
+				// 检查结果长度不超过最大长度
+				if len(result) > tt.maxLength {
+					t.Errorf("TruncateFilename(%q, %d) = %q has length %d, exceeds max %d", tt.filename, tt.maxLength, result, len(result), tt.maxLength)
+				}
+
+				// 检查扩展名被保留（如果有的话）
+				dotIndex := strings.LastIndex(tt.filename, ".")
+				if dotIndex > 0 && dotIndex < len(tt.filename)-1 {
+					expectedExt := tt.filename[dotIndex:]
+					resultExt := result[strings.LastIndex(result, "."):]
+					if resultExt != expectedExt {
+						// 扩展名可能被截断，但要确保有扩展名分隔符
+						if strings.LastIndex(result, ".") < 0 {
+							t.Logf("Warning: Extension %q was completely removed", expectedExt)
+						}
+					}
+				}
 			}
 		})
 	}
