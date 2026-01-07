@@ -1,15 +1,30 @@
+// Package extractor provides functionality for extracting files from IPFS DAG nodes
+// to the local file system. It supports atomic writes, progress tracking, and handles
+// various file types including regular files, directories, and symlinks.
+//
+// The extractor ensures safe extraction by:
+//   - Preventing path traversal attacks
+//   - Supporting atomic writes using temporary .part files
+//   - Handling backslash-separated paths (Windows-style)
+//   - Cleaning invalid filenames automatically
+//
+// Example usage:
+//
+//	extractor := NewExtractor(blockStore, cid, "/output/path")
+//	extractor.WithProgress(func(completed, total int64, file string) {
+//	    fmt.Printf("Progress: %d/%d\n", completed, total)
+//	})
+//	err := extractor.Extract(ctx, true) // true to allow overwriting
 package extractor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
@@ -17,50 +32,28 @@ import (
 	"github.com/ipfs/boxo/ipld/merkledag"
 	unixfile "github.com/ipfs/boxo/ipld/unixfs/file"
 	"github.com/ipfs/go-cid"
-	"github.com/tragoedia0722/repository/pkg/helper"
 )
 
-const writeBufferSize = 4 * 1024 * 1024
+// Error variables are defined in errors.go
+// progressCallback is defined in progress.go
 
-var (
-	ErrPathExistsOverwrite = errors.New("path already exists and overwriting is not allowed")
-	ErrPathTraversal       = errors.New("extraction path escapes base directory")
-)
-
-type progressCallback func(completed, total int64, currentFile string)
-
+// Extractor handles extraction of files from IPFS DAG nodes to the local filesystem.
+// It provides atomic writes, progress tracking, and safety features like path traversal
+// prevention.
 type Extractor struct {
-	blockStore    blockstore.Blockstore
-	cid           string
-	path          string
-	basePath      string
-	progress      progressCallback
-	bufferPool    sync.Pool
-	nodeSize      int64
-	extractedSize atomic.Int64
-	isInterrupted bool
+	blockStore blockstore.Blockstore // IPFS blockstore for reading data
+	cid        string                // Content ID of the root node to extract
+	path       string                // Target extraction path (cleaned and normalized)
+	basePath   string                // Base path for security validation
+	trackerMu  sync.RWMutex          // Protects tracker access
+	tracker    *progressTracker      // Progress tracking and interruption state
+	bufferPool sync.Pool             // Buffer pool for efficient file writes
 }
 
+// NewExtractor creates a new Extractor instance with the given blockstore, CID,
+// and target path. The path is cleaned and normalized for safety.
 func NewExtractor(blockStore blockstore.Blockstore, cid string, path string) *Extractor {
-	cleanPath := filepath.Clean(path)
-
-	pathParts := strings.Split(cleanPath, string(filepath.Separator))
-	cleanedParts := make([]string, 0, len(pathParts))
-
-	for _, part := range pathParts {
-		if part == "" {
-			cleanedParts = append(cleanedParts, part)
-			continue
-		}
-
-		cleanPart := helper.CleanFilename(part)
-		if cleanPart == "" {
-			cleanPart = "cleaned_dir"
-		}
-		cleanedParts = append(cleanedParts, cleanPart)
-	}
-
-	finalPath := strings.Join(cleanedParts, string(filepath.Separator))
+	finalPath := cleanPathComponents(path)
 
 	return &Extractor{
 		blockStore: blockStore,
@@ -69,17 +62,34 @@ func NewExtractor(blockStore blockstore.Blockstore, cid string, path string) *Ex
 		basePath:   finalPath,
 		bufferPool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, writeBufferSize)
+				return make([]byte, defaultWriteBufferSize)
 			},
 		},
 	}
 }
 
+// WithProgress sets a callback function that will be called periodically during
+// extraction to report progress. The callback receives the number of bytes completed,
+// total bytes, and the current file being extracted.
+// Returns the extractor instance for method chaining.
 func (ext *Extractor) WithProgress(progressFn progressCallback) *Extractor {
-	ext.progress = progressFn
+	ext.trackerMu.Lock()
+	defer ext.trackerMu.Unlock()
+
+	if ext.tracker == nil {
+		ext.tracker = newProgressTracker(0, progressFn)
+	} else {
+		ext.tracker.callback = progressFn
+	}
 	return ext
 }
 
+// Extract starts the extraction process from the IPFS DAG node specified by the CID.
+// If overwrite is true, existing files will be replaced. Otherwise, extraction will
+// fail if any file already exists.
+//
+// The extraction is performed atomically using temporary .part files, and supports
+// context cancellation for graceful interruption.
 func (ext *Extractor) Extract(ctx context.Context, overwrite bool) error {
 	bs := blockservice.New(ext.blockStore, nil)
 	ds := merkledag.NewDAGService(bs)
@@ -103,7 +113,15 @@ func (ext *Extractor) Extract(ctx context.Context, overwrite bool) error {
 	if err != nil {
 		return err
 	}
-	ext.nodeSize = size
+
+	// Initialize progress tracker if not already initialized
+	ext.trackerMu.Lock()
+	if ext.tracker == nil {
+		ext.tracker = newProgressTracker(size, nil)
+	} else {
+		ext.tracker.setTotal(size)
+	}
+	ext.trackerMu.Unlock()
 
 	if !ext.isSubPath(ext.path, ext.basePath) {
 		return ErrPathTraversal
@@ -118,10 +136,11 @@ func (ext *Extractor) Extract(ctx context.Context, overwrite bool) error {
 }
 
 func (ext *Extractor) updateProgress(size int64, filename string) {
-	ext.extractedSize.Add(size)
+	ext.trackerMu.RLock()
+	defer ext.trackerMu.RUnlock()
 
-	if ext.progress != nil {
-		ext.progress(ext.extractedSize.Load(), ext.nodeSize, filename)
+	if ext.tracker != nil {
+		ext.tracker.update(size, filename)
 	}
 }
 
@@ -148,44 +167,52 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 	default:
 	}
 
-	if ext.isInterrupted {
-		return errors.New("extraction was interrupted")
+	ext.trackerMu.RLock()
+	interrupted := ext.tracker != nil && ext.tracker.isSet()
+	ext.trackerMu.RUnlock()
+
+	if interrupted {
+		return ErrInterrupted
 	}
 
-	if _, err := os.Lstat(path); err == nil {
+	// Check if path exists and get its info
+	pathInfo, err := getPathInfo(path)
+	if err != nil {
+		return err
+	}
+
+	if pathInfo.exists {
 		if !allowOverwrite {
 			return ErrPathExistsOverwrite
 		}
 
-		fi, e1 := os.Lstat(path)
-		if e1 != nil {
-			return e1
-		}
-
 		isNodeDir := ext.isDir(nd)
+		nodeSize, err := nd.Size()
+		if err != nil {
+			return fmt.Errorf("failed to get node size: %w", err)
+		}
 
-		if fi.IsDir() && isNodeDir {
-			// pass
-		} else {
-			if fi.Mode().IsRegular() && !isNodeDir {
-				if size, _ := nd.Size(); fi.Size() == size {
-					ext.updateProgress(size, relativePath)
-					return nil
-				}
-			}
-			if err = os.RemoveAll(path); err != nil {
-				return fmt.Errorf("failed to remove existing path: %w", err)
+		// Check if we should skip this existing file (only for regular files with same size)
+		if shouldSkipExistingFile(pathInfo.FileInfo, nodeSize, isNodeDir) {
+			// Update progress and skip extraction
+			ext.updateProgress(nodeSize, relativePath)
+			return nil
+		}
+
+		// For existing directories that match node directories, merge contents (do nothing)
+		// For everything else, remove the existing path
+		if !(pathInfo.IsDir() && isNodeDir) {
+			if err := removePath(path); err != nil {
+				return err
 			}
 		}
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 
 	switch node := nd.(type) {
 	case *files.Symlink:
 		target := node.Target
 		if !ext.isValidSymlinkTarget(target) {
-			return fmt.Errorf("invalid symlink target: %s", target)
+			return wrapInvalidSymlinkTarget(target)
 		}
 		return os.Symlink(target, path)
 
@@ -193,26 +220,26 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 		return ext.writeFileWithBuffer(ctx, node, path, relativePath)
 
 	case files.Directory:
-		if err := os.MkdirAll(path, 0o755); err != nil {
+		if err := os.MkdirAll(path, dirPermissions); err != nil {
 			return err
 		}
 		entries := node.Entries()
 		return ext.processDirectory(ctx, entries, path, allowOverwrite, relativePath)
 
 	default:
-		return fmt.Errorf("file type %T at %q is not supported", node, path)
+		return wrapUnsupportedFileType(path, node)
 	}
 }
 
 func (*Extractor) createPartFile(finalPath string) (*os.File, string, error) {
 	dir := filepath.Dir(finalPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirPermissions); err != nil {
 		return nil, "", err
 	}
 
-	partPath := finalPath + ".part"
+	partPath := finalPath + partFileSuffix
 
-	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, filePermissions)
 	if err == nil {
 		return f, partPath, nil
 	}
@@ -223,7 +250,7 @@ func (*Extractor) createPartFile(finalPath string) (*os.File, string, error) {
 	if remErr := os.Remove(partPath); remErr != nil && !os.IsNotExist(remErr) {
 		return nil, "", remErr
 	}
-	f, err = os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err = os.OpenFile(partPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, filePermissions)
 	if err != nil {
 		return nil, "", err
 	}
@@ -269,6 +296,11 @@ func (ext *Extractor) writeFileWithBuffer(ctx context.Context, node files.File, 
 		return retErr
 	}
 
+	// Flush any remaining progress
+	if pr.bytesSinceUpdate > 0 {
+		ext.updateProgress(pr.bytesSinceUpdate, relativePath)
+	}
+
 	if err = tmpF.Sync(); err != nil {
 		retErr = err
 		return retErr
@@ -298,51 +330,27 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 
 		entryName := entries.Name()
 		if entryName == "" || entryName == "." || entryName == ".." {
-			return fmt.Errorf("invalid directory entry name: %s", entryName)
+			return wrapInvalidDirectoryEntry(entryName)
 		}
 
+		// Normalize the entry name (handles both simple names and backslash paths)
+		cleanedName, err := normalizeEntryName(entryName)
+		if err != nil {
+			return err
+		}
+
+		// Build child paths
 		var childPath, childRelPath string
+		childPath = filepath.Join(path, cleanedName)
+		childRelPath = filepath.Join(relativePath, cleanedName)
 
-		if strings.Contains(entryName, "\\") {
-			normalizedPath := strings.ReplaceAll(entryName, "\\", "/")
-			pathParts := strings.Split(normalizedPath, "/")
-
-			cleanedParts := make([]string, 0, len(pathParts))
-			for _, part := range pathParts {
-				if part == "" || part == "." {
-					continue
-				}
-				if part == ".." {
-					return fmt.Errorf("path traversal attempt: %s", entryName)
-				}
-
-				cleanPart := helper.CleanFilename(part)
-				if cleanPart == "" {
-					return fmt.Errorf("invalid path component: %s", part)
-				}
-				cleanedParts = append(cleanedParts, cleanPart)
-			}
-
-			if len(cleanedParts) == 0 {
-				return fmt.Errorf("no valid path components: %s", entryName)
-			}
-
-			cleanedPath := strings.Join(cleanedParts, string(filepath.Separator))
-			childPath = filepath.Join(path, cleanedPath)
-			childRelPath = filepath.Join(relativePath, cleanedPath)
-
+		// If the cleaned name contains path separators (nested path from backslash handling),
+		// create parent directories to ensure they exist before writing the file
+		if strings.Contains(cleanedName, string(filepath.Separator)) {
 			parentDir := filepath.Dir(childPath)
-			if err := os.MkdirAll(parentDir, 0o755); err != nil {
-				return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
+			if err := os.MkdirAll(parentDir, dirPermissions); err != nil {
+				return wrapMkdirFailed(parentDir, err)
 			}
-		} else {
-			cleanName := helper.CleanFilename(entryName)
-			if cleanName == "" {
-				return fmt.Errorf("invalid directory entry name: %s", entryName)
-			}
-
-			childPath = filepath.Join(path, cleanName)
-			childRelPath = filepath.Join(relativePath, cleanName)
 		}
 
 		entryNode := entries.Node()
@@ -357,11 +365,11 @@ func (ext *Extractor) processDirectory(ctx context.Context, entries files.DirIte
 
 func (*Extractor) createNewFile(path string) (*os.File, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirPermissions); err != nil {
 		return nil, err
 	}
 
-	return os.OpenFile(path, os.O_EXCL|os.O_CREATE|os.O_WRONLY, 0o644)
+	return os.OpenFile(path, os.O_EXCL|os.O_CREATE|os.O_WRONLY, filePermissions)
 }
 
 func (*Extractor) isDir(nd files.Node) bool {
@@ -370,20 +378,23 @@ func (*Extractor) isDir(nd files.Node) bool {
 }
 
 func (*Extractor) isValidSymlinkTarget(target string) bool {
-	targetPath := filepath.Clean(target)
-
-	return !filepath.IsAbs(targetPath) && !strings.HasPrefix(targetPath, "..")
+	return validateSymlinkTarget(target)
 }
 
 type extractReader struct {
-	r          io.Reader
-	onProgress func(int64)
+	r                io.Reader
+	onProgress       func(int64)
+	bytesSinceUpdate int64
 }
 
 func (pr *extractReader) Read(p []byte) (n int, err error) {
 	n, err = pr.r.Read(p)
 	if n > 0 && pr.onProgress != nil {
-		pr.onProgress(int64(n))
+		pr.bytesSinceUpdate += int64(n)
+		if pr.bytesSinceUpdate >= progressUpdateThreshold {
+			pr.onProgress(pr.bytesSinceUpdate)
+			pr.bytesSinceUpdate = 0
+		}
 	}
 
 	return

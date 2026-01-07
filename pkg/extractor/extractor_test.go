@@ -156,12 +156,13 @@ func TestExtractor_WithProgress(t *testing.T) {
 		progressCalled = true
 	})
 
-	if ext.progress == nil {
+	if !ext.tracker.hasCallback() {
 		t.Error("progress callback not set")
 	}
 
 	// Test it gets called
-	ext.progress(100, 1000, "test.txt")
+	callback := ext.tracker.getCallback()
+	callback(100, 1000, "test.txt")
 	if !progressCalled {
 		t.Error("progress callback was not called")
 	}
@@ -558,8 +559,16 @@ func TestExtractor_updateProgress(t *testing.T) {
 		lastFile = currentFile
 	})
 
-	// Set node size first
-	ext.nodeSize = 1000
+	// Initialize tracker with total size
+	ext.tracker = newProgressTracker(1000, nil)
+	lastCompleted = 0
+	lastTotal = 0
+	lastFile = ""
+	ext.tracker.callback = func(completed, total int64, currentFile string) {
+		lastCompleted = completed
+		lastTotal = total
+		lastFile = currentFile
+	}
 	ext.updateProgress(100, "test.txt")
 
 	if lastCompleted != 100 {
@@ -774,6 +783,16 @@ func TestExtractor_isValidSymlinkTarget(t *testing.T) {
 			name:     "double parent",
 			target:   "../../file",
 			expected: false,
+		},
+		{
+			name:     "dotted parent traversal",
+			target:   "./../../etc/passwd",
+			expected: false, // Should be rejected by filepath.Rel check
+		},
+		{
+			name:     "nested parent traversal",
+			target:   "dir/../../../etc/passwd",
+			expected: false, // Should be rejected by filepath.Rel check
 		},
 	}
 
