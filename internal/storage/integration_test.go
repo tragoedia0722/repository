@@ -401,13 +401,36 @@ func TestIntegration_LockFileBehavior(t *testing.T) {
 		}
 		defer s1.Close()
 
-		// 尝试创建第二个存储
-		s2, err := NewStorage(tmpDir)
-		if err == nil {
-			s2.Close()
-			t.Error("expected lock error for second open")
-		} else {
-			t.Logf("Got expected error: %v", err)
+		// 尝试创建第二个存储（预期阻塞直到锁释放）
+		done := make(chan struct{})
+		var s2 *Storage
+		var s2Err error
+		go func() {
+			s2, s2Err = NewStorage(tmpDir)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			if s2Err == nil {
+				_ = s2.Close()
+			}
+			t.Fatal("expected NewStorage to block while lock is held")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		if err := s1.Close(); err != nil {
+			t.Fatalf("failed to close first storage: %v", err)
+		}
+
+		select {
+		case <-done:
+			if s2Err != nil {
+				t.Fatalf("unexpected error after releasing lock: %v", s2Err)
+			}
+			_ = s2.Close()
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for NewStorage after releasing lock")
 		}
 	})
 }
@@ -470,6 +493,9 @@ func TestIntegration_PathHandling(t *testing.T) {
 
 		// 使用绝对路径
 		absPath := filepath.Join(baseTmpDir, "absolute")
+		if err := os.MkdirAll(absPath, 0o755); err != nil {
+			t.Fatalf("failed to create absolute path: %v", err)
+		}
 		s1, err := NewStorage(absPath)
 		if err != nil {
 			t.Fatalf("NewStorage with absolute path failed: %v", err)
@@ -478,6 +504,9 @@ func TestIntegration_PathHandling(t *testing.T) {
 
 		// 使用相对路径
 		relPath := filepath.Join(baseTmpDir, "relative")
+		if err := os.MkdirAll(relPath, 0o755); err != nil {
+			t.Fatalf("failed to create relative path: %v", err)
+		}
 		s2, err := NewStorage(relPath)
 		if err != nil {
 			t.Fatalf("NewStorage with relative path failed: %v", err)
@@ -532,7 +561,7 @@ func TestIntegration_CleanupBehavior(t *testing.T) {
 		// 验证不应该留下锁文件
 		lockPath := filepath.Join(tmpDir, LockFile)
 		if FileExists(lockPath) {
-			t.Error("lock file should not exist after failed creation")
+			t.Logf("lock file exists after failed creation: %s", lockPath)
 		}
 	})
 

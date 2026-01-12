@@ -8,9 +8,9 @@ package main
 import (  
     "context"  
     "fmt"  
-    "git.hificloud.net/nas2024/cloud/demeter/repository/pkg/extractor"  
-    "git.hificloud.net/nas2024/cloud/demeter/repository/pkg/importer"  
-    "git.hificloud.net/nas2024/cloud/demeter/repository/pkg/repository"  
+    "github.com/tragoedia0722/repository/pkg/extractor"  
+    "github.com/tragoedia0722/repository/pkg/importer"  
+    "github.com/tragoedia0722/repository/pkg/repository"  
 )  
 
 func main() {  
@@ -47,6 +47,22 @@ func main() {
     // 关闭仓库  
     _ = repo.Close()  
 }  
+```
+
+## 开发与测试
+
+```bash
+# 构建全部包
+go build ./...
+
+# 全量测试
+go test ./...
+
+# 短测试（跳过耗时用例）
+go test ./... -short
+
+# 竞态检测
+go test -race ./...
 ```
 
 ## API

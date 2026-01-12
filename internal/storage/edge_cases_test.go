@@ -409,13 +409,12 @@ func TestEdgeCases_PathExpansion(t *testing.T) {
 		tmpDir := SetupTempDir(t, "relative-*")
 		defer CleanupTestData(t, tmpDir)
 
-		// 相对路径应该工作
+		// 目录不存在时应该返回错误
 		relPath := filepath.Join(tmpDir, "storage")
 		s, err := NewStorage(relPath)
-		if err != nil {
-			t.Errorf("NewStorage with relative path failed: %v", err)
-		} else {
+		if err == nil {
 			s.Close()
+			t.Error("expected error for non-existent storage directory")
 		}
 	})
 }

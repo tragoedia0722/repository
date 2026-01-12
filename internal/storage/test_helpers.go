@@ -36,6 +36,10 @@ func SetupStorage(t *testing.T) (*Storage, string) {
 		t.Fatalf("NewStorage failed: %v", err)
 	}
 
+	t.Cleanup(func() {
+		CleanupTestData(t, tmpDir, s)
+	})
+
 	return s, tmpDir
 }
 
