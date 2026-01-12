@@ -390,6 +390,7 @@ func (imp *Importer) addDir(ctx context.Context, dirPath string, dir files.Direc
 	}
 
 	it := dir.Entries()
+	seenNames := make(map[string]string)
 	for it.Next() {
 		select {
 		case <-ctx.Done():
@@ -398,11 +399,16 @@ func (imp *Importer) addDir(ctx context.Context, dirPath string, dir files.Direc
 		}
 
 		originalName := it.Name()
-		_, isDir := it.Node().(files.Directory)
+		entryNode := it.Node()
+		_, isDir := entryNode.(files.Directory)
 		cleanName := cleanEntryName(originalName, isDir)
+		if previous, exists := seenNames[cleanName]; exists {
+			return fmt.Errorf("duplicate cleaned entry name %q from %q and %q", cleanName, previous, originalName)
+		}
+		seenNames[cleanName] = originalName
 
 		entryPath := filepath.Join(dirPath, cleanName)
-		if err := imp.addNode(ctx, entryPath, it.Node(), false); err != nil {
+		if err := imp.addNode(ctx, entryPath, entryNode, false); err != nil {
 			return err
 		}
 	}

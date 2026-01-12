@@ -2,6 +2,7 @@ package extractor
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,7 +13,9 @@ import (
 // Empty components are preserved. Components that clean to empty strings are replaced
 // with the default cleaned directory name.
 func cleanPathComponents(path string) string {
-	cleanPath := filepath.Clean(path)
+	volume := filepath.VolumeName(path)
+	pathWithoutVolume := strings.TrimPrefix(path, volume)
+	cleanPath := filepath.Clean(pathWithoutVolume)
 
 	pathParts := strings.Split(cleanPath, string(filepath.Separator))
 	cleanedParts := make([]string, 0, len(pathParts))
@@ -30,7 +33,14 @@ func cleanPathComponents(path string) string {
 		cleanedParts = append(cleanedParts, cleanPart)
 	}
 
-	return strings.Join(cleanedParts, string(filepath.Separator))
+	cleanedPath := strings.Join(cleanedParts, string(filepath.Separator))
+	if volume == "" {
+		return cleanedPath
+	}
+	if cleanedPath == "." {
+		return volume
+	}
+	return volume + cleanedPath
 }
 
 // normalizeEntryName normalizes a directory entry name, handling both simple names
@@ -113,4 +123,56 @@ func validateSymlinkTarget(target string) bool {
 	}
 
 	return true
+}
+
+func ensureNoSymlinkInPath(basePath, targetPath string) error {
+	absBase, err := filepath.Abs(basePath)
+	if err != nil {
+		return wrapPathTraversal(basePath)
+	}
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return wrapPathTraversal(targetPath)
+	}
+
+	absBase = filepath.Clean(absBase)
+	absTarget = filepath.Clean(absTarget)
+
+	if absTarget != absBase && !strings.HasPrefix(absTarget, absBase+string(filepath.Separator)) {
+		return wrapPathTraversal(targetPath)
+	}
+
+	if baseInfo, err := os.Lstat(absBase); err == nil {
+		if baseInfo.Mode()&os.ModeSymlink != 0 {
+			return wrapPathTraversal(absBase)
+		}
+	}
+
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil {
+		return wrapPathTraversal(targetPath)
+	}
+	if rel == "." {
+		return nil
+	}
+
+	currentPath := absBase
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		currentPath = filepath.Join(currentPath, part)
+		info, err := os.Lstat(currentPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return wrapPathTraversal(currentPath)
+		}
+	}
+
+	return nil
 }

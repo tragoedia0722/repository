@@ -175,6 +175,10 @@ func (ext *Extractor) writeTo(ctx context.Context, nd files.Node, path string, a
 		return ErrInterrupted
 	}
 
+	if err := ensureNoSymlinkInPath(ext.basePath, path); err != nil {
+		return err
+	}
+
 	// Check if path exists and get its info
 	pathInfo, err := getPathInfo(path)
 	if err != nil {
